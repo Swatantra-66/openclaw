@@ -8,7 +8,10 @@ function resolveScopedChannelCandidate(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = normalizeMessageChannel(value);
-  return normalized || undefined;
+  if (!normalized || normalized === "all") {
+    return undefined;
+  }
+  return normalized;
 }
 
 function resolveChannelFromTargetValue(target: unknown): string | undefined {

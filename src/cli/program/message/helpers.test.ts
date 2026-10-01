@@ -469,6 +469,26 @@ describe("runMessageAction", () => {
     expectRegistryLoad(["configured-channel"]);
   });
 
+  it("loads configured channel plugins for --channel all broadcasts", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        channel: "all",
+        targets: ["discord:channel:1", "telegram:123"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expectRegistryLoad(["configured-channel"]);
+    expectMessageCommandOptions({
+      action: "broadcast",
+      channel: "all",
+      targets: ["discord:channel:1", "telegram:123"],
+      message: "hi",
+    });
+  });
+
   it("exits with failure when plugin registry loading fails before dispatch", async () => {
     loadPluginRegistryHandleMock.mockImplementationOnce(() => {
       throw new Error("plugin load failed");

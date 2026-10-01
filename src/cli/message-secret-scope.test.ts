@@ -95,4 +95,36 @@ describe("resolveMessageSecretScope", () => {
       channel: "signal",
     });
   });
+
+  it("excludes reserved 'all' broadcast selector from channel scope", () => {
+    expect(
+      resolveMessageSecretScope({
+        channel: "all",
+      }),
+    ).toStrictEqual({});
+
+    expect(
+      resolveMessageSecretScope({
+        channel: "ALL",
+        accountId: "Ops",
+      }),
+    ).toEqual({
+      accountId: "ops",
+    });
+
+    expect(
+      resolveMessageSecretScope({
+        channel: "all",
+        fallbackChannel: "custom-matrix",
+      }),
+    ).toEqual({
+      channel: "custom-matrix",
+    });
+
+    expect(
+      resolveMessageSecretScope({
+        fallbackChannel: "all",
+      }),
+    ).toStrictEqual({});
+  });
 });
