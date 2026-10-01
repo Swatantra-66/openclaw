@@ -43,6 +43,26 @@ describe("resolveMessageSecretScope", () => {
     ).toStrictEqual({});
   });
 
+  it("preserves explicit custom or request-scoped channel inputs", () => {
+    expect(
+      resolveMessageSecretScope({
+        channel: "custom-matrix",
+        accountId: "Ops",
+      }),
+    ).toEqual({
+      channel: "custom-matrix",
+      accountId: "ops",
+    });
+  });
+
+  it("does not infer unknown channels from non-channel target prefixes", () => {
+    expect(
+      resolveMessageSecretScope({
+        target: "user:12345",
+      }),
+    ).toStrictEqual({});
+  });
+
   it("uses fallback channel/account when direct inputs are missing", () => {
     expect(
       resolveMessageSecretScope({
@@ -52,6 +72,27 @@ describe("resolveMessageSecretScope", () => {
     ).toEqual({
       channel: "signal",
       accountId: "chat",
+    });
+  });
+
+  it("preserves fallback custom channel inputs", () => {
+    expect(
+      resolveMessageSecretScope({
+        fallbackChannel: "custom-relay",
+      }),
+    ).toEqual({
+      channel: "custom-relay",
+    });
+  });
+
+  it("falls back when channel normalizes to empty string", () => {
+    expect(
+      resolveMessageSecretScope({
+        channel: "   ",
+        fallbackChannel: "Signal",
+      }),
+    ).toEqual({
+      channel: "signal",
     });
   });
 });

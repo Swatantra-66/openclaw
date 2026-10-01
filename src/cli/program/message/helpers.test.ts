@@ -391,6 +391,20 @@ describe("runMessageAction", () => {
     expectRegistryLoad(["discord"]);
   });
 
+  it("preloads discoverable scoped channel plugin for custom channel options", async () => {
+    getChannelPluginMock.mockReturnValue(undefined);
+
+    await runSendAction({ channel: "custom-matrix", target: "room:12345" });
+
+    expectRegistryLoad(["custom-matrix"]);
+    expectMessageCommandOptions({
+      action: "send",
+      channel: "custom-matrix",
+      target: "room:12345",
+      message: "hi",
+    });
+  });
+
   it("keeps target-prefixed Telegram sends from local plugin preload", async () => {
     await runSendAction({ channel: undefined, target: "telegram:12345" });
 
