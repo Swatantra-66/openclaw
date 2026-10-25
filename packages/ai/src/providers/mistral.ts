@@ -277,7 +277,12 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         ) {
           return false;
         }
-        if (incomingName.startsWith(currentName)) {
+        if (
+          incomingName.startsWith(currentName) &&
+          (!offeredFunctionNames ||
+            offeredFunctionNames.size === 0 ||
+            [...offeredFunctionNames].some((name) => name.startsWith(incomingName)))
+        ) {
           return true;
         }
         if (
@@ -551,7 +556,10 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
               // Preserve one-shot name repetitions without duplicate concatenation.
             } else if (
               functionName.startsWith(block.name) &&
-              !(offeredFunctionNames && offeredFunctionNames.has(block.name))
+              !(offeredFunctionNames && offeredFunctionNames.has(block.name)) &&
+              (!offeredFunctionNames ||
+                offeredFunctionNames.size === 0 ||
+                [...offeredFunctionNames].some((name) => name.startsWith(functionName)))
             ) {
               // Cumulative name prefix update.
               block.name = functionName;

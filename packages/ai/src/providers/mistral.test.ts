@@ -829,7 +829,7 @@ describe("Mistral provider", () => {
         [
           {
             index: 0,
-            function: { name: "get_", arguments: '{"city":"Berlin"}' },
+            function: { name: "fetch_data", arguments: '{"city":"Berlin"}' },
           },
         ],
       ],
@@ -838,7 +838,7 @@ describe("Mistral provider", () => {
         ...context,
         tools: [
           { ...makeHealthyTool(), name: "get_weather" },
-          { ...makeHealthyTool(), name: "get_" },
+          { ...makeHealthyTool(), name: "fetch_data" },
         ] as never,
       },
     );
@@ -851,9 +851,42 @@ describe("Mistral provider", () => {
       arguments: { city: "Paris" },
     });
     expect(toolCalls[1]).toMatchObject({
-      name: "get_",
+      name: "fetch_data",
       arguments: { city: "Berlin" },
     });
+  });
+
+  it("rejects cumulative prefix continuation when new name is not a prefix of any offered tool", async () => {
+    const { result, toolCalls } = await runMistralToolFixture(
+      "response-cumulative-prefix-unoffered-reject",
+      [
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "get_", arguments: '{"v":1}' },
+          },
+        ],
+        [
+          {
+            id: "call_0",
+            index: 0,
+            function: { name: "get_unknown", arguments: ',"extra":2}' },
+          },
+        ],
+      ],
+      undefined,
+      {
+        ...context,
+        tools: [{ ...makeHealthyTool(), name: "get_weather" }] as never,
+      },
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "Mistral streamed tool-call continuation changed function name",
+    );
+    expect(toolCalls).toEqual([]);
   });
 
   it("rejects renaming a complete offered tool when a longer prefix arrives on the same call", async () => {
