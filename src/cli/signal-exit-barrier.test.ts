@@ -1,15 +1,61 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import {
   exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
   registerSignalExitGate,
+  registerSignalExitOwner,
   waitForCliSignalExit,
 } from "./signal-exit-barrier.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+
+function exitProbe() {
+  const previousExitCode = process.exitCode;
+  const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+    throw new Error("Process exited");
+  });
+  onTestFinished(() => {
+    exit.mockRestore();
+    process.exitCode = previousExitCode;
+  });
+  return exit;
+}
+
+function ownExit(owner: Parameters<typeof registerSignalExitOwner>[0]) {
+  const release = registerSignalExitOwner(owner);
+  onTestFinished(release);
+  return release;
+}
+
+it("retains an exclusive process exit owner until its exact release", async () => {
+  const exit = exitProbe();
+  const owner = vi.fn();
+  const other = vi.fn();
+  const release = ownExit(owner);
+  expect(() => registerSignalExitOwner(other)).toThrow("already registered");
+  exitAfterSignalExitBarriers(7, "unhandled rejection");
+  expect(owner).toHaveBeenCalledExactlyOnceWith(7, "unhandled rejection");
+  expect(other).not.toHaveBeenCalled();
+  release();
+  const releaseOther = ownExit(other);
+  release();
+  exitAfterSignalExitBarriers(9);
+  expect(other).toHaveBeenCalledExactlyOnceWith(9, undefined);
+  releaseOther();
+  const releaseSame = ownExit(owner);
+  release();
+  exitAfterSignalExitBarriers(11);
+  expect(owner).toHaveBeenLastCalledWith(11, undefined);
+  releaseSame();
+  exitAfterSignalExitBarriers(0);
+  await expect(waitForCliSignalExit()).resolves.toBe(0);
+  expect(process.exitCode).toBe(0);
+  expect(exit).not.toHaveBeenCalled();
+});
 
 it.each([
   { owner: "mutation", code: 0, failed: true, expected: 1 },
@@ -20,33 +66,24 @@ it.each([
   "preserves exit $expected while $owner drains (failed: $failed)",
   async ({ owner, code, failed, expected }) => {
     const drain = createDeferredCore();
-    const unregister =
+    const exit = exitProbe();
+    onTestFinished(
       owner === "mutation"
         ? registerSignalExitGate(drain.promise)
-        : registerSignalExitBarrier(() => drain.promise);
-    const exited = new Error("Process exited");
-    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
-      throw exited;
-    });
-    const previousExitCode = process.exitCode;
+        : registerSignalExitBarrier(() => drain.promise),
+    );
     process.exitCode = 0;
-    try {
-      exitAfterSignalExitBarriers(code);
-      exitAfterSignalExitBarriers(0);
-      expect(exit).not.toHaveBeenCalled();
-      const finished = expect(waitForCliSignalExit()).rejects.toBe(exited);
-      if (failed) {
-        drain.reject(new Error("Maintenance failed"));
-      } else {
-        drain.resolve();
-      }
-      await finished;
-      expect(exit).toHaveBeenCalledExactlyOnceWith(expected);
-    } finally {
-      unregister();
-      exit.mockRestore();
-      process.exitCode = previousExitCode;
+    exitAfterSignalExitBarriers(code);
+    exitAfterSignalExitBarriers(0);
+    const finished = expect(waitForCliSignalExit()).resolves.toBe(expected);
+    if (failed) {
+      drain.reject(new Error("Maintenance failed"));
+    } else {
+      drain.resolve();
     }
+    await finished;
+    expect(process.exitCode).toBe(expected);
+    expect(exit).not.toHaveBeenCalled();
   },
 );
 
@@ -60,14 +97,20 @@ it.skipIf(process.platform === "win32").each([
   const root = directories.make("cli-signal-owner-");
   const result = spawnSync(
     process.execPath,
-    [
-      "--import",
-      import.meta.resolve("tsx"),
-      "--input-type=module",
-      "-e",
+    createNodeEvalArgs(
       `import { once } from 'node:events';
          import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
-         installCliSignalExitHandlers();
+         const releaseSignals = installCliSignalExitHandlers();
+         if (${JSON.stringify(kind)} === 'fallback') {
+           installCliSignalExitHandlers();
+           releaseSignals();
+           releaseSignals();
+         }
+         const backstop = setTimeout(() => process.exit(99), 5000);
+         registerSignalExitBarrier(async () => { clearTimeout(backstop); });
+         process.once("beforeExit", () => {
+           if (${JSON.stringify(kind)} === "fallback") process.stdout.write("|natural");
+         });
          if (${JSON.stringify(kind)} === 'execa') {
            const { execa } = await import('execa');
            const child = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
@@ -82,9 +125,9 @@ it.skipIf(process.platform === "win32").each([
              setImmediate(() => { process.stdout.write('owner drained'); process.exit(23); });
            });
          }
-         process.kill(process.pid, ${JSON.stringify(signal)});
-         setTimeout(() => process.exit(99), 5000);`,
-    ],
+         process.kill(process.pid, ${JSON.stringify(signal)});`,
+      { imports: [import.meta.resolve("tsx")], evalFlag: "-e" },
+    ),
     {
       encoding: "utf8",
       timeout: 30_000,
@@ -95,10 +138,11 @@ it.skipIf(process.platform === "win32").each([
   if (kind === "execa") {
     expect(result.signal, result.stderr).toBe("SIGTERM");
   } else if (kind === "fallback") {
-    expect(result.status, result.stderr).toBe(signal === "SIGINT" ? 130 : 143);
-    expect(result.stdout).toBe("fallback drained");
+    expect(result, result.stderr).toMatchObject({
+      status: signal === "SIGINT" ? 130 : 143,
+      stdout: "fallback drained|natural",
+    });
   } else {
-    expect(result.status, result.stderr).toBe(23);
-    expect(result.stdout).toBe("owner drained");
+    expect(result, result.stderr).toMatchObject({ status: 23, stdout: "owner drained" });
   }
 });

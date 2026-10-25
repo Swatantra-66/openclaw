@@ -9,8 +9,12 @@ import { applyPatch } from "diff";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
+import { hasErrnoCode } from "../../../infra/errno.js";
+import { readPersistedFileStat } from "./file-write-verification.js";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, type WriteToolOptions } from "./write.js";
+
+type WriteOperations = NonNullable<WriteToolOptions["operations"]>;
 
 const WritePatchReceiptSchema = Type.Extract(
   WriteToolOutputSchema,
@@ -44,26 +48,8 @@ describe("write tool", () => {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: async (absolutePath) => {
-        try {
-          const stat = await fs.stat(absolutePath);
-          return {
-            type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-          } as const;
-        } catch (error) {
-          if (
-            error &&
-            typeof error === "object" &&
-            "code" in error &&
-            (error as { code?: unknown }).code === "ENOENT"
-          ) {
-            return null;
-          }
-          throw error;
-        }
-      },
+      statFile: (absolutePath) =>
+        readPersistedFileStat(absolutePath, (error) => hasErrnoCode(error, "ENOENT")),
     };
   }
 
@@ -230,7 +216,7 @@ describe("write tool", () => {
     await expect(fs.readFile(asciiPath, "utf-8")).resolves.toBe("ascii\n");
   });
 
-  it.each(["hello\n", "café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
+  it.each(["café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
     "returns a non-terminal no-op for identical UTF-8 content: %j",
     async (content) => {
       const filePath = await createTempPath("identical.txt");

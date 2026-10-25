@@ -10,7 +10,7 @@ import {
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+import { createCanonicalFixtureSkill, makeSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import {
   formatSkillsCompactForPrompt as formatSkillsCompact,
@@ -23,16 +23,6 @@ const buildWorkspaceSkillsPrompt = async (
   workspaceDir: string,
   opts?: Parameters<typeof buildSkillSnapshot>[1],
 ): Promise<string> => (await buildSkillSnapshot(workspaceDir, opts)).prompt;
-
-function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return createCanonicalFixtureSkill({
-    name,
-    description: desc,
-    filePath,
-    baseDir: `/skills/${name}`,
-    source: "workspace",
-  });
-}
 
 function makeEntry(skill: Skill): SkillEntry {
   return {
@@ -106,6 +96,28 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
 
     expect(prompt).toContain("visible");
     expect(prompt).not.toContain("hidden");
+  });
+
+  it("keeps eligible discovery independent from the prompt budget and hidden skills", async () => {
+    const visible = makeSkill("alpha");
+    const omitted = makeSkill("zulu");
+    const hidden = makeEntry(makeSkill("hidden"));
+    hidden.exposure = {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: false,
+      userInvocable: true,
+    };
+    const snapshot = await buildSkillSnapshot("/fake", {
+      entries: [makeEntry(visible), makeEntry(omitted), hidden],
+      config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
+    });
+
+    expect(snapshot.resolvedSkills).toEqual([visible]);
+    expect(snapshot.discoverySkills).toEqual([visible, omitted]);
+    expect(snapshot.prompt).toContain("<name>alpha</name>");
+    expect(snapshot.prompt).not.toContain("<name>zulu</name>");
+    expect(snapshot.prompt).not.toContain("<name>hidden</name>");
+    expect(snapshot.skills.map((skill) => skill.name)).toContain("hidden");
   });
 
   it("tier 1: uses full format when under budget", async () => {

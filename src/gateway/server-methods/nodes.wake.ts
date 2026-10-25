@@ -1,13 +1,10 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
-  resolveApnsAuthConfigFromEnv,
-  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   sendApnsBackgroundWake,
   shouldClearStoredApnsRegistration,
@@ -26,44 +23,18 @@ import {
   type NodeWakeLifecycle,
   type NodeWakeNudgeAttempt,
 } from "../node-wake-state.js";
+import { resolveNodePushTransport } from "./node-push-transport.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { isNodePushAttemptCurrent, resolveDispatchableNodeSession } from "./nodes.shared.js";
-
-async function resolveNodePushTransport(
-  registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
-  cfg?: OpenClawConfig,
-) {
-  if (registration.transport === "relay") {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, (cfg ?? getRuntimeConfig()).gateway, {
-      registrationRelayOrigin: registration.relayOrigin,
-    });
-    return relay.ok
-      ? { ok: true as const, transport: { registration, relayConfig: relay.value } }
-      : { ok: false as const, error: relay.error };
-  }
-  const auth = await resolveApnsAuthConfigFromEnv(process.env);
-  return auth.ok
-    ? { ok: true as const, transport: { registration, auth: auth.value } }
-    : { ok: false as const, error: auth.error };
-}
 
 async function clearStaleApnsRegistrationIfNeeded(
   registration: NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
   nodeId: string,
   params: { status: number; reason?: string },
 ) {
-  if (
-    !shouldClearStoredApnsRegistration({
-      registration,
-      result: params,
-    })
-  ) {
-    return;
+  if (shouldClearStoredApnsRegistration({ registration, result: params })) {
+    await clearApnsRegistrationIfCurrent({ nodeId, registration });
   }
-  await clearApnsRegistrationIfCurrent({
-    nodeId,
-    registration,
-  });
 }
 
 export async function maybeWakeNodeWithApns(
@@ -272,12 +243,10 @@ export async function waitForNodeReconnect(params: {
     };
   };
   timeoutMs?: number;
-  pollMs?: number;
   lifecycle?: NodeWakeLifecycle;
   pairingGeneration?: string;
 }): Promise<boolean> {
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 1);
-  const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = performance.now() + timeoutMs;
 
   for (;;) {
@@ -297,6 +266,6 @@ export async function waitForNodeReconnect(params: {
     if (!beforeDeadline) {
       return false;
     }
-    await sleep(Math.min(pollMs, Math.max(0, deadline - performance.now())));
+    await sleep(Math.min(NODE_WAKE_RECONNECT_POLL_MS, Math.max(0, deadline - performance.now())));
   }
 }
